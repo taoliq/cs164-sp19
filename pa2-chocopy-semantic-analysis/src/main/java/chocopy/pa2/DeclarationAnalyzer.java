@@ -5,22 +5,13 @@ import java.util.List;
 import java.util.Stack;
 
 import chocopy.common.analysis.AbstractNodeAnalyzer;
-import chocopy.common.analysis.SymbolTable;
+// import chocopy.common.analysis.SymbolTable;
 import chocopy.common.analysis.types.ClassValueType;
 import chocopy.common.analysis.types.DefinedClassType;
 import chocopy.common.analysis.types.FuncType;
 import chocopy.common.analysis.types.SymbolType;
 import chocopy.common.analysis.types.ValueType;
 import chocopy.common.astnodes.*;
-import chocopy.common.astnodes.Declaration;
-import chocopy.common.astnodes.Errors;
-import chocopy.common.astnodes.FuncDef;
-import chocopy.common.astnodes.GlobalDecl;
-import chocopy.common.astnodes.Identifier;
-import chocopy.common.astnodes.NonLocalDecl;
-import chocopy.common.astnodes.Program;
-import chocopy.common.astnodes.TypedVar;
-import chocopy.common.astnodes.VarDef;
 
 /**
  * Analyzes declarations to create a top-level symbol table.
@@ -34,7 +25,7 @@ public class DeclarationAnalyzer extends AbstractNodeAnalyzer<SymbolType> {
     /** Receiver for semantic error messages. */
     private final Errors errors;
 
-    /************************ */
+    /*************************/
     /** Symbol table stack. To track the parent symbol table. */
     private Stack<SymbolTable<SymbolType>> stk = new Stack<>();
 
@@ -55,7 +46,8 @@ public class DeclarationAnalyzer extends AbstractNodeAnalyzer<SymbolType> {
 
         SymbolTable<SymbolType> objSym = new SymbolTable<>();
         objSym.put("__init__", initFunc);
-        return new DefinedClassType("object", objSym);
+        sym.putScope("object", objSym);
+        return new DefinedClassType("object");
     }
 
     @Override
@@ -213,7 +205,10 @@ public class DeclarationAnalyzer extends AbstractNodeAnalyzer<SymbolType> {
 
     @Override
     public SymbolType analyze(FuncDef funcDef) {
+        Identifier funcId = funcDef.getIdentifier();
+        String funcName = funcId.name;
         SymbolTable<SymbolType> curSym = new SymbolTable<>(stk.peek());
+        stk.peek().putScope(funcName, curSym);
         stk.push(curSym);
 
         List<ValueType> params = new ArrayList<>();
@@ -319,11 +314,13 @@ public class DeclarationAnalyzer extends AbstractNodeAnalyzer<SymbolType> {
             return null;
         }
 
-        SymbolTable<SymbolType> superSym = 
-                ((DefinedClassType) globals.get(superClassName)).symbolTable;
+        // SymbolTable<SymbolType> superSym = 
+        //         ((DefinedClassType) globals.get(superClassName)).symbolTable;
+        
+        SymbolTable<SymbolType> superSym = globals.getScope(superClassName);
         SymbolTable<SymbolType> curSym = new SymbolTable<>(superSym);
         stk.push(curSym);
-        curSym.put(className, new DefinedClassType(superClassName, curSym));
+        curSym.put(className, new DefinedClassType(superClassName));
         //check attributes and methods
         for (Declaration decl : classDef.declarations) {
             Identifier id = decl.getIdentifier();
@@ -360,7 +357,8 @@ public class DeclarationAnalyzer extends AbstractNodeAnalyzer<SymbolType> {
             }
         }
         stk.pop();
-        return new DefinedClassType(superClassName, curSym);
+        globals.putScope(className, curSym);
+        return new DefinedClassType(superClassName);
     }
 
     private boolean isValidClassMethod(String className, Identifier funcId, FuncType funcType) {

@@ -1,6 +1,6 @@
 package chocopy.pa2;
 
-import chocopy.common.analysis.SymbolTable;
+// import chocopy.common.analysis.SymbolTable;
 import chocopy.common.analysis.types.SymbolType;
 import chocopy.common.astnodes.Program;
 

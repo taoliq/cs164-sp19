@@ -70,12 +70,6 @@ public abstract class SymbolType {
         return false;
     }
 
-    /** Return true iff this type represents a kind of defined class. */
-    @JsonIgnore
-    public boolean isClassType() {
-        return false;
-    }
-
     /** For list types, return the type of the elements; otherwise null. */
     @JsonIgnore
     public ValueType elementType() {
