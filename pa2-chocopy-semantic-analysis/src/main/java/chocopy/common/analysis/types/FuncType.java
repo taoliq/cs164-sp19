@@ -14,7 +14,6 @@ public class FuncType extends SymbolType {
     public final List<ValueType> parameters;
     /** Function's return type. */
     public final ValueType returnType;
-    public final SymbolTable<SymbolType> sym;
 
     /** Create a FuncType returning RETURNTYPE0, intiallly parapeterless. */
     public FuncType(ValueType returnType0) {
@@ -29,15 +28,8 @@ public class FuncType extends SymbolType {
                     ValueType returnType0) {
         this.parameters = parameters0;
         this.returnType = returnType0;
-        this.sym = null;
     }
 
-    public FuncType(List<ValueType> parameters0,
-                    ValueType returnType0, SymbolTable<SymbolType> sym) {
-        this.parameters = parameters0;
-        this.returnType = returnType0;
-        this.sym = sym;
-    }
 
     @Override
     public boolean isFuncType() {

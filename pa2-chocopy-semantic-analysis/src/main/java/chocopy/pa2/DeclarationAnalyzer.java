@@ -47,18 +47,21 @@ public class DeclarationAnalyzer extends AbstractNodeAnalyzer<SymbolType> {
         SymbolTable<SymbolType> objSym = new SymbolTable<>();
         objSym.put("__init__", initFunc);
         sym.putScope("object", objSym);
-        return new DefinedClassType("object");
+        return new DefinedClassType(null, "object");
     }
 
     @Override
     public SymbolType analyze(Program program) {
-        sym.put("print", new FuncType(ValueType.OBJECT_TYPE));
-        sym.put("input", new FuncType(ValueType.OBJECT_TYPE));
-        sym.put("len", new FuncType(ValueType.INT_TYPE));
-        // preddfined type name
-        sym.put("str", new DefinedClassType());
-        sym.put("bool", new DefinedClassType());
-        sym.put("int", new DefinedClassType());
+        List<ValueType> params = new ArrayList<>();
+        params.add(ValueType.OBJECT_TYPE);
+        sym.put("print", new FuncType(params, ValueType.NONE_TYPE));
+        sym.put("input", new FuncType(ValueType.STR_TYPE));
+        sym.put("len", new FuncType(params, ValueType.INT_TYPE));
+        // predefined type name
+        sym.put("str", new DefinedClassType("object"));
+        sym.put("bool", new DefinedClassType("object"));
+        sym.put("int", new DefinedClassType("object"));
+//        sym.put("<None>", SymbolType.NONE_TYPE);
         sym.put("object", initObjectClass());
 
         stk.push(sym);
@@ -105,13 +108,6 @@ public class DeclarationAnalyzer extends AbstractNodeAnalyzer<SymbolType> {
             }
         }
 
-        for (Stmt stmt : program.statements) {
-            if (stmt instanceof ReturnStmt) {
-                errors.semError(stmt,
-                                "Return statement cannot appear at the top level");
-            }
-        }
-
         return null;
     }
 
@@ -128,6 +124,9 @@ public class DeclarationAnalyzer extends AbstractNodeAnalyzer<SymbolType> {
     @Override
     public SymbolType analyze(ClassType type) {
         String name = type.className;
+        if (name.equals("<None>")) {
+            return SymbolType.NONE_TYPE;
+        }
         if (!existsClassName(name)) {
             errors.semError(type,
                             "Invalid type annotation; "
@@ -320,7 +319,7 @@ public class DeclarationAnalyzer extends AbstractNodeAnalyzer<SymbolType> {
         SymbolTable<SymbolType> superSym = globals.getScope(superClassName);
         SymbolTable<SymbolType> curSym = new SymbolTable<>(superSym);
         stk.push(curSym);
-        curSym.put(className, new DefinedClassType(superClassName));
+        curSym.put(className, new DefinedClassType(superClassName, className));
         //check attributes and methods
         for (Declaration decl : classDef.declarations) {
             Identifier id = decl.getIdentifier();
@@ -336,56 +335,55 @@ public class DeclarationAnalyzer extends AbstractNodeAnalyzer<SymbolType> {
                                 "Duplicate declaration of identifier in same "
                                 + "scope: %s",
                                 name);
-            } else if (globals.declares(name) 
+                continue;
+            }
+            if (globals.declares(name)
                         && globals.get(name) instanceof DefinedClassType) {
                 // name is the defined type
                 errors.semError(id,
                                 "Cannot shadow class name: %s",
                                 name);
-            } else if (type instanceof ValueType && superSym.declares(name)) {
+                continue;
+            }
+            if (type instanceof ValueType && superSym.declares(name)) {
                 errors.semError(id,
                                 "Cannot re-define attribute: %s",
                                 name);
-            } else if (type instanceof FuncType 
-                        && !isValidClassMethod(className, id, (FuncType) type)) {
-                errors.semError(id,
-                                "First parameter of the following method " 
-                                + "must be of the enclosing class: %s",
-                                name);
-            } else {
-                curSym.put(name, type);
+                continue;
             }
+            if (type instanceof FuncType) {
+                checkValidClassMethod(className, id, (FuncType) type);
+            }
+            curSym.put(name, type);
         }
         stk.pop();
         globals.putScope(className, curSym);
-        return new DefinedClassType(superClassName);
+        return new DefinedClassType(superClassName, className);
     }
 
-    private boolean isValidClassMethod(String className, Identifier funcId, FuncType funcType) {
+    private void checkValidClassMethod(String className, Identifier funcId, FuncType funcType) {
         String funcName = funcId.name;
         if (!isValidFirstParameter(className, funcType)) {
             errors.semError(funcId,
                             "First parameter of the following method " 
                             + "must be of the enclosing class: %s",
                             funcName);
-            return false;
+            return;
         }
 
         if (!isValidMethodName(funcName)) {
             errors.semError(funcId,
                             "Cannot re-define attribute: %s",
                             funcName);
-            return false;
+            return;
         }
 
         if (!isSameMethodSignatures(funcName, funcType)) {
             errors.semError(funcId, 
                             "Method overridden with different type signature: %s", 
                             funcName);
-            return false;
+            return;
         }
-
-        return true;
     }
 
     private boolean isValidFirstParameter(String className, FuncType funcType) {
@@ -416,6 +414,10 @@ public class DeclarationAnalyzer extends AbstractNodeAnalyzer<SymbolType> {
 
         if (superFuncType.parameters.size() != funcType.parameters.size()) {
             return false;
+        }
+
+        if (funcName.equals("__init__") && funcType.parameters.size() == 1) {
+            return true;
         }
 
         for (int i = 1; i < funcType.parameters.size(); i++) {
