@@ -44,7 +44,7 @@ public class DeclarationAnalyzer extends AbstractNodeAnalyzer<SymbolType> {
         params.add(ValueType.OBJECT_TYPE);
         FuncType initFunc = new FuncType(params, ValueType.NONE_TYPE);
 
-        SymbolTable<SymbolType> objSym = new SymbolTable<>();
+        SymbolTable<SymbolType> objSym = new SymbolTable<>(globals);
         objSym.put("__init__", initFunc);
         sym.putScope("object", objSym);
         return new DefinedClassType(null, "object");

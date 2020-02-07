@@ -72,12 +72,24 @@ public class TypeChecker extends AbstractNodeAnalyzer<SymbolType> {
     public SymbolType analyze(FuncDef funcDef) {
         Identifier id = funcDef.getIdentifier();
         SymbolTable<SymbolType> curSym = stk.peek().getScope(id.name);
+        SymbolType rtnType = null;
         stk.push(curSym);
         for (Declaration decl : funcDef.declarations) {
             decl.dispatch(this);
         }
         for (Stmt stmt : funcDef.statements) {
             stmt.dispatch(this);
+            if (stmt instanceof ReturnStmt
+                    && ((ReturnStmt) stmt).value != null) {
+                rtnType = ((ReturnStmt) stmt).value.getInferredType();
+            }
+        }
+        if (rtnType == null
+                && !curSym.get("return").equals(NONE_TYPE)
+                && !curSym.get("return").equals(OBJECT_TYPE)) {
+            err(id,
+                    "All paths in this function/method must return a non-None value: %s",
+                    id.name);
         }
         stk.pop();
         return null;
@@ -105,11 +117,12 @@ public class TypeChecker extends AbstractNodeAnalyzer<SymbolType> {
     @Override
     public SymbolType analyze(MethodCallExpr methodCallExpr) {
         SymbolType methodType = methodCallExpr.method.dispatch(this);
+        SymbolType objType = methodCallExpr.method.object.getInferredType();
         List<ValueType> params = null;
         List<SymbolType> args = new ArrayList<>();
+        args.add(objType);
 
         if (!methodType.isFuncType()) {
-            SymbolType objType = methodCallExpr.method.object.getInferredType();
             String className = objType.className();
             String attrName = methodCallExpr.method.member.name;
 
@@ -122,16 +135,17 @@ public class TypeChecker extends AbstractNodeAnalyzer<SymbolType> {
             args.add(e.dispatch(this));
         }
         params = ((FuncType) methodType).parameters;
-        checkParametersType(methodCallExpr, params.subList(1, params.size()) ,args);
+        checkParametersType(methodCallExpr, params, args);
         return methodCallExpr.setInferredType(((FuncType) methodType).returnType);
     }
 
     private void checkParametersType(
             Node node, List<ValueType> params, List<SymbolType> args) {
         if (params.size() != args.size()) {
+            int offset = node instanceof MethodCallExpr ? -1 : 0;
             err(node,
                     "Expected %d arguments; got %d",
-                    params.size(), args.size());
+                    params.size() + offset, args.size() + offset);
             return;
         }
         for (int i = 0; i < params.size(); i++) {
@@ -140,7 +154,7 @@ public class TypeChecker extends AbstractNodeAnalyzer<SymbolType> {
             if (!isAncestor(param, arg)) {
                 err(node,
                         "Expected type `%s`; got type `%s` in parameter %d",
-                        param, arg, i+1);
+                        param, arg, i);
             }
         }
     }
@@ -165,6 +179,7 @@ public class TypeChecker extends AbstractNodeAnalyzer<SymbolType> {
             rtnType = ((FuncType) funcType).returnType;
         } else if (funcType instanceof DefinedClassType) {
             params = ((FuncType) sym.getScope(funcName).get("__init__")).parameters;
+//            args.add(0, new ClassValueType(funcType.className()));
             params = params.subList(1, params.size());
             rtnType = new ClassValueType(funcType.className());
         } else {
