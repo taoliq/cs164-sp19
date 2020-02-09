@@ -18,20 +18,19 @@ public class StudentAnalysis {
         DeclarationAnalyzer declarationAnalyzer =
             new DeclarationAnalyzer(program.errors);
         program.dispatch(declarationAnalyzer);
+
         SymbolTable<SymbolType> globalSym =
             declarationAnalyzer.getGlobals();
 
-        if (!program.hasErrors()) {
-            StatementAnalyzer stmtAnalyzer =
-                new StatementAnalyzer(globalSym, program.errors);
-            program.dispatch(stmtAnalyzer);
-        }
+        DeclarationChecker declarationChecker =
+                new DeclarationChecker(globalSym, program.errors);
+        program.dispatch(declarationChecker);
+
+//        StatementAnalyzer stmtAnalyzer =
+//            new StatementAnalyzer(globalSym, program.errors);
+//        program.dispatch(stmtAnalyzer);
 
         if (!program.hasErrors()) {
-            // System.out.println("--begin type check----");
-            // for (String name : globalSym.getDeclaredSymbols()) {
-            //     System.out.println(name + " : " + globalSym.get(name));
-            // }
             TypeChecker typeChecker =
                 new TypeChecker(globalSym, program.errors);
             program.dispatch(typeChecker);

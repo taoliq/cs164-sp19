@@ -19,6 +19,8 @@ public class TypeChecker extends AbstractNodeAnalyzer<SymbolType> {
     /** The current symbol table (changes depending on the function
      *  being analyzed). */
     private SymbolTable<SymbolType> sym;
+    /** Global symbol table. */
+    private SymbolTable<SymbolType> globals;
     /** Collector for errors. */
     private Errors errors;
 
@@ -29,7 +31,7 @@ public class TypeChecker extends AbstractNodeAnalyzer<SymbolType> {
     /** Creates a type checker using GLOBALSYMBOLS for the initial global
      *  symbol table and ERRORS0 to receive semantic errors. */
     public TypeChecker(SymbolTable<SymbolType> globalSymbols, Errors errors0) {
-        sym = globalSymbols;
+        globals = globalSymbols;
         errors = errors0;
     }
 
@@ -42,7 +44,8 @@ public class TypeChecker extends AbstractNodeAnalyzer<SymbolType> {
 
     @Override
     public SymbolType analyze(Program program) {
-        stk.push(sym);
+        stk.push(globals);
+        sym = stk.peek();
         for (Declaration decl : program.declarations) {
             decl.dispatch(this);
         }
@@ -55,9 +58,8 @@ public class TypeChecker extends AbstractNodeAnalyzer<SymbolType> {
 
     @Override
     public SymbolType analyze(VarDef varDef) {
-        SymbolTable<SymbolType> curSym = stk.peek();
         String varName = varDef.var.identifier.name;
-        SymbolType varType = curSym.get(varName);
+        SymbolType varType = sym.get(varName);
         SymbolType valType = varDef.value.dispatch(this);
 
         if (!isTypeCompatible(varType, valType)) {
@@ -71,9 +73,10 @@ public class TypeChecker extends AbstractNodeAnalyzer<SymbolType> {
     @Override
     public SymbolType analyze(FuncDef funcDef) {
         Identifier id = funcDef.getIdentifier();
-        SymbolTable<SymbolType> curSym = stk.peek().getScope(id.name);
+//        SymbolTable<SymbolType> curSym = stk.peek()
+        sym = sym.getScope(id.name);
+        stk.push(sym);
         SymbolType rtnType = null;
-        stk.push(curSym);
         for (Declaration decl : funcDef.declarations) {
             decl.dispatch(this);
         }
@@ -85,13 +88,14 @@ public class TypeChecker extends AbstractNodeAnalyzer<SymbolType> {
             }
         }
         if (rtnType == null
-                && !curSym.get("return").equals(NONE_TYPE)
-                && !curSym.get("return").equals(OBJECT_TYPE)) {
+                && !sym.get("return").equals(NONE_TYPE)
+                && !sym.get("return").equals(OBJECT_TYPE)) {
             err(id,
                     "All paths in this function/method must return a non-None value: %s",
                     id.name);
         }
         stk.pop();
+        sym = stk.peek();
         return null;
     }
 
@@ -99,12 +103,16 @@ public class TypeChecker extends AbstractNodeAnalyzer<SymbolType> {
     @Override
     public SymbolType analyze(ClassDef classDef) {
         Identifier id = classDef.getIdentifier();
-        SymbolTable<SymbolType> curSym = sym.getScope(id.name);
-        stk.push(curSym);
+//        SymbolTable<SymbolType> curSym = sym.getScope(id.name);
+        sym = globals.getScope(id.name);
+        stk.push(sym);
+
         for (Declaration decl : classDef.declarations) {
             decl.dispatch(this);
         }
+
         stk.pop();
+        sym = stk.peek();
         return null;
     }
 
@@ -161,12 +169,12 @@ public class TypeChecker extends AbstractNodeAnalyzer<SymbolType> {
 
     @Override
     public SymbolType analyze(CallExpr callExpr) {
-        SymbolTable<SymbolType> curSym = stk.peek();
+//        SymbolTable<SymbolType> curSym = stk.peek();
 //        callExpr.function.dispatch(this);
         String funcName = callExpr.function.name;
-        SymbolType funcType = curSym.get(funcName);
-        SymbolType rtnType = SymbolType.OBJECT_TYPE;
-        List<ValueType> params = new ArrayList<>();
+        SymbolType funcType = sym.get(funcName);
+        SymbolType rtnType;
+        List<ValueType> params;
         List<SymbolType> args = new ArrayList<>();
 
         for (Expr e : callExpr.args) {
@@ -175,11 +183,12 @@ public class TypeChecker extends AbstractNodeAnalyzer<SymbolType> {
 
         if (funcType instanceof FuncType) {
             callExpr.function.dispatch(this);
+
             params = ((FuncType) funcType).parameters;
             rtnType = ((FuncType) funcType).returnType;
         } else if (funcType instanceof DefinedClassType) {
             params = ((FuncType) sym.getScope(funcName).get("__init__")).parameters;
-//            args.add(0, new ClassValueType(funcType.className()));
+
             params = params.subList(1, params.size());
             rtnType = new ClassValueType(funcType.className());
         } else {
@@ -197,7 +206,8 @@ public class TypeChecker extends AbstractNodeAnalyzer<SymbolType> {
     @Override
     public SymbolType analyze(ReturnStmt s) {
         SymbolType t = null;
-        SymbolType exp = stk.peek().get("return");
+        SymbolType exp = sym.get("return");
+
         if (s.value != null) {
             t = s.value.dispatch(this);
         }
@@ -264,7 +274,7 @@ public class TypeChecker extends AbstractNodeAnalyzer<SymbolType> {
         String className = t.className();
         while (className != null) {
             stk.push(className);
-            className = ((DefinedClassType) sym.get(className)).superClassName();
+            className = ((DefinedClassType) globals.get(className)).superClassName();
         }
         return stk;
     }
@@ -368,10 +378,10 @@ public class TypeChecker extends AbstractNodeAnalyzer<SymbolType> {
         String pName = parent.className();
         String cName = child.className();
         while (!pName.equals(cName)) {
-            if (pName == null || cName == null || sym.get(cName) == null) {
+            if (pName == null || cName == null || globals.get(cName) == null) {
                 return false;
             }
-            cName = ((DefinedClassType) sym.get(cName)).superClassName();
+            cName = ((DefinedClassType) globals.get(cName)).superClassName();
         }
         return true;
     }
@@ -379,11 +389,10 @@ public class TypeChecker extends AbstractNodeAnalyzer<SymbolType> {
     @Override
     public SymbolType analyze(MemberExpr memberExpr) {
         SymbolType objType = memberExpr.object.dispatch(this);
-//        System.out.println(objType);
-
         String className = objType.className();
-        SymbolTable<SymbolType> classSym = sym.getScope(className);
+        SymbolTable<SymbolType> classSym = globals.getScope(className);
         String attrName = memberExpr.member.name;
+
         if (classSym == null || classSym.get(attrName) == null) {
             err(memberExpr,
                 "There is no attribute named `%s` in class `%s`",
@@ -531,9 +540,8 @@ public class TypeChecker extends AbstractNodeAnalyzer<SymbolType> {
 
     @Override
     public SymbolType analyze(Identifier id) {
-        SymbolTable<SymbolType> curSym = stk.peek();
         String varName = id.name;
-        SymbolType varType = curSym.get(varName);
+        SymbolType varType = sym.get(varName);
 
         if (varType != null) {
             if (varType instanceof DefinedClassType) {

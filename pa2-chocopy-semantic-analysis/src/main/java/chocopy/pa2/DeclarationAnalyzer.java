@@ -5,13 +5,22 @@ import java.util.List;
 import java.util.Stack;
 
 import chocopy.common.analysis.AbstractNodeAnalyzer;
-// import chocopy.common.analysis.SymbolTable;
+//import chocopy.common.analysis.SymbolTable;
 import chocopy.common.analysis.types.ClassValueType;
 import chocopy.common.analysis.types.DefinedClassType;
 import chocopy.common.analysis.types.FuncType;
 import chocopy.common.analysis.types.SymbolType;
 import chocopy.common.analysis.types.ValueType;
 import chocopy.common.astnodes.*;
+import chocopy.common.astnodes.Declaration;
+import chocopy.common.astnodes.Errors;
+import chocopy.common.astnodes.FuncDef;
+import chocopy.common.astnodes.GlobalDecl;
+import chocopy.common.astnodes.Identifier;
+import chocopy.common.astnodes.NonLocalDecl;
+import chocopy.common.astnodes.Program;
+import chocopy.common.astnodes.TypedVar;
+import chocopy.common.astnodes.VarDef;
 
 /**
  * Analyzes declarations to create a top-level symbol table.
@@ -25,7 +34,7 @@ public class DeclarationAnalyzer extends AbstractNodeAnalyzer<SymbolType> {
     /** Receiver for semantic error messages. */
     private final Errors errors;
 
-    /*************************/
+    /** ********************** */
     /** Symbol table stack. To track the parent symbol table. */
     private Stack<SymbolTable<SymbolType>> stk = new Stack<>();
 
@@ -46,7 +55,7 @@ public class DeclarationAnalyzer extends AbstractNodeAnalyzer<SymbolType> {
 
         SymbolTable<SymbolType> objSym = new SymbolTable<>(globals);
         objSym.put("__init__", initFunc);
-        sym.putScope("object", objSym);
+        globals.putScope("object", objSym);
         return new DefinedClassType(null, "object");
     }
 
@@ -54,24 +63,20 @@ public class DeclarationAnalyzer extends AbstractNodeAnalyzer<SymbolType> {
     public SymbolType analyze(Program program) {
         List<ValueType> params = new ArrayList<>();
         params.add(ValueType.OBJECT_TYPE);
-        sym.put("print", new FuncType(params, ValueType.NONE_TYPE));
-        sym.put("input", new FuncType(ValueType.STR_TYPE));
-        sym.put("len", new FuncType(params, ValueType.INT_TYPE));
+        globals.put("print", new FuncType(params, ValueType.NONE_TYPE));
+        globals.put("input", new FuncType(ValueType.STR_TYPE));
+        globals.put("len", new FuncType(params, ValueType.INT_TYPE));
         // predefined type name
-        sym.put("str", new DefinedClassType("object"));
-        sym.put("bool", new DefinedClassType("object"));
-        sym.put("int", new DefinedClassType("object"));
+        globals.put("str", new DefinedClassType("object"));
+        globals.put("bool", new DefinedClassType("object"));
+        globals.put("int", new DefinedClassType("object"));
 //        sym.put("<None>", SymbolType.NONE_TYPE);
-        sym.put("object", initObjectClass());
+        globals.put("object", initObjectClass());
 
-        stk.push(sym);
+        stk.push(globals);
+        sym = stk.peek();
 
-        List<FuncDef> funcDefList = new ArrayList<>();
         for (Declaration decl : program.declarations) {
-            if (decl instanceof FuncDef) {
-                funcDefList.add((FuncDef) decl);
-                continue;
-            }
 
             Identifier id = decl.getIdentifier();
             String name = id.name;
@@ -90,23 +95,8 @@ public class DeclarationAnalyzer extends AbstractNodeAnalyzer<SymbolType> {
             }
 
         }
-        for (FuncDef funcDef : funcDefList) {
-            Identifier id = funcDef.getIdentifier();
-            String name = id.name;
-            SymbolType type = funcDef.dispatch(this);
 
-            if (type == null) {
-                continue;
-            }
-            if (sym.declares(name)) {
-                errors.semError(id,
-                                "Duplicate declaration of identifier in same "
-                                + "scope: %s",
-                                name);
-            } else {
-                sym.put(name, type);
-            }
-        }
+
 
         return null;
     }
@@ -127,78 +117,12 @@ public class DeclarationAnalyzer extends AbstractNodeAnalyzer<SymbolType> {
         if (name.equals("<None>")) {
             return SymbolType.NONE_TYPE;
         }
-        if (!existsClassName(name)) {
-            errors.semError(type,
-                            "Invalid type annotation; "
-                            + "there is no class named: %s",
-                            name);
-            return null;
-        }
         return ValueType.annotationToValueType(type);
-    }
-
-    private boolean existsClassName(String name) {
-        if (globals.declares(name) 
-                && (globals.get(name) instanceof DefinedClassType)) {
-            return true;
-        }
-
-        SymbolTable<SymbolType> curSym = stk.peek();
-        if (curSym.get(name) != null 
-                && (curSym.get(name) instanceof DefinedClassType)) {
-            return true;
-        }
-        
-        return false;
     }
 
     @Override
     public SymbolType analyze(ListType type) {
         return ValueType.annotationToValueType(type);
-    }
-    
-    @Override
-    public SymbolType analyze(GlobalDecl globalDecl) {
-        SymbolTable<SymbolType> curSym = stk.peek();
-        Identifier id = globalDecl.getIdentifier();
-        String name = id.name;
-        if (curSym.declares(name)) {
-            errors.semError(id,
-                            "Duplicate declaration of identifier in same "
-                            + "scope: %s",
-                            name);
-            return null;
-        } else if (!globals.declares(name)  || !globals.get(name).isValueType()) {
-            errors.semError(id,
-                            "Not a global variable: %s",
-                            name);
-            return null;
-        }
-        return globals.get(name);
-    }
-
-    @Override
-    public SymbolType analyze(NonLocalDecl nonLocalDecl) {
-        SymbolTable<SymbolType> curSym = stk.peek();
-        SymbolTable<SymbolType> outerSym = curSym.getParent();
-        Identifier id = nonLocalDecl.getIdentifier();
-        String name = id.name;
-        
-        if (curSym.declares(name)) {
-            errors.semError(id,
-                            "Duplicate declaration of identifier in same "
-                            + "scope: %s",
-                            name);
-            return null;
-        } else if (outerSym == globals 
-                    || !outerSym.declares(name) 
-                    || !outerSym.get(name).isValueType()) {
-            errors.semError(id,
-                            "Not a nonlocal variable: %s",
-                            name);
-            return null;
-        }
-        return outerSym.get(name);
     }
 
 
@@ -206,9 +130,11 @@ public class DeclarationAnalyzer extends AbstractNodeAnalyzer<SymbolType> {
     public SymbolType analyze(FuncDef funcDef) {
         Identifier funcId = funcDef.getIdentifier();
         String funcName = funcId.name;
-        SymbolTable<SymbolType> curSym = new SymbolTable<>(stk.peek());
-        stk.peek().putScope(funcName, curSym);
+        SymbolTable<SymbolType> curSym = new SymbolTable<>(sym);
+
         stk.push(curSym);
+        sym.putScope(funcName, curSym);
+        sym = stk.peek();
 
         List<ValueType> params = new ArrayList<>();
         for (TypedVar var : funcDef.params) {
@@ -218,19 +144,13 @@ public class DeclarationAnalyzer extends AbstractNodeAnalyzer<SymbolType> {
             if (type == null) {
                 continue;
             }
-            if (curSym.declares(name)) {
+            if (sym.declares(name)) {
                 errors.semError(id,
                                 "Duplicate declaration of identifier in same "
                                 + "scope: %s",
                                 name);
-            } else if (globals.declares(name) 
-                        && globals.get(name) instanceof DefinedClassType) {
-                // name is the defined type
-                errors.semError(id,
-                                "Cannot shadow class name: %s",
-                                name);
             } else {
-                curSym.put(name, type);
+                sym.put(name, type);
                 params.add((ValueType) type);
             }
         }
@@ -244,51 +164,23 @@ public class DeclarationAnalyzer extends AbstractNodeAnalyzer<SymbolType> {
                 continue;
             }
 
-            if (curSym.declares(name)) {
+            if (sym.declares(name)) {
                 errors.semError(id,
                                 "Duplicate declaration of identifier in same "
                                 + "scope: %s",
                                 name);
-            } else if (globals.declares(name) 
-                        && globals.get(name) instanceof DefinedClassType) {
-                // name is the defined type
-                errors.semError(id,
-                                "Cannot shadow class name: %s",
-                                name);
             } else {
-                curSym.put(name, type);
+                sym.put(name, type);
             }
-        }
-
-        for (Stmt stmt : funcDef.statements) {
-            stmt.dispatch(this);
         }
 
         ValueType returnType = 
             (ValueType) funcDef.returnType.dispatch(this);
-
-        curSym.put("return", returnType);
+        sym.put("return", returnType);
         
         stk.pop();
+        sym = stk.peek();
         return new FuncType(params, returnType);
-    }
-
-    @Override 
-    public SymbolType analyze(AssignStmt stmt) {
-        SymbolTable<SymbolType> curSym = stk.peek();
-        for (Expr expr : stmt.targets) {
-            if (expr instanceof Identifier) {
-                Identifier id = (Identifier) expr ;
-                String name = id.name;
-                if (!curSym.declares(name)) {
-                    errors.semError(id,
-                            "Cannot assign to variable that is " 
-                            + "not explicitly declared in this scope: %s",
-                            name);
-                }
-            }
-        }
-        return null;
     }
 
     @Override 
@@ -301,25 +193,27 @@ public class DeclarationAnalyzer extends AbstractNodeAnalyzer<SymbolType> {
                             "Super-class not defined: %s",
                             superClassName);
             return null;
-        } else if (!(globals.get(superClassName) instanceof DefinedClassType)) {
+        }
+        if (!(globals.get(superClassName) instanceof DefinedClassType)) {
             errors.semError(superId,
                             "Super-class must be a class: %s",
                             superClassName);
             return null;
-        } else if (((DefinedClassType) globals.get(superClassName)).isSpecialClass()) {
+        }
+        if (((DefinedClassType) globals.get(superClassName)).isSpecialClass()) {
             errors.semError(superId,
                             "Cannot extend special class: %s",
                             superClassName);
             return null;
         }
 
-        // SymbolTable<SymbolType> superSym = 
-        //         ((DefinedClassType) globals.get(superClassName)).symbolTable;
-        
         SymbolTable<SymbolType> superSym = globals.getScope(superClassName);
         SymbolTable<SymbolType> curSym = new SymbolTable<>(superSym);
+        globals.putScope(className, curSym);
+
         stk.push(curSym);
-        curSym.put(className, new DefinedClassType(superClassName, className));
+        sym = stk.peek();
+        sym.put(className, new DefinedClassType(superClassName, className));
         //check attributes and methods
         for (Declaration decl : classDef.declarations) {
             Identifier id = decl.getIdentifier();
@@ -330,109 +224,33 @@ public class DeclarationAnalyzer extends AbstractNodeAnalyzer<SymbolType> {
                 continue;
             }
 
-            if (curSym.declares(name)) {
+            if (sym.declares(name)) {
                 errors.semError(id,
-                                "Duplicate declaration of identifier in same "
+                        "Duplicate declaration of identifier in same "
                                 + "scope: %s",
-                                name);
+                        name);
                 continue;
             }
             if (globals.declares(name)
-                        && globals.get(name) instanceof DefinedClassType) {
+                    && globals.get(name) instanceof DefinedClassType) {
                 // name is the defined type
                 errors.semError(id,
-                                "Cannot shadow class name: %s",
-                                name);
+                        "Cannot shadow class name: %s",
+                        name);
                 continue;
             }
             if (type instanceof ValueType && superSym.declares(name)) {
                 errors.semError(id,
-                                "Cannot re-define attribute: %s",
-                                name);
+                        "Cannot re-define attribute: %s",
+                        name);
                 continue;
             }
-            if (type instanceof FuncType) {
-                checkValidClassMethod(className, id, (FuncType) type);
-            }
-            curSym.put(name, type);
+
+            sym.put(name, type);
         }
         stk.pop();
-        globals.putScope(className, curSym);
+        sym = stk.peek();
         return new DefinedClassType(superClassName, className);
     }
-
-    private void checkValidClassMethod(String className, Identifier funcId, FuncType funcType) {
-        String funcName = funcId.name;
-        if (!isValidFirstParameter(className, funcType)) {
-            errors.semError(funcId,
-                            "First parameter of the following method " 
-                            + "must be of the enclosing class: %s",
-                            funcName);
-            return;
-        }
-
-        if (!isValidMethodName(funcName)) {
-            errors.semError(funcId,
-                            "Cannot re-define attribute: %s",
-                            funcName);
-            return;
-        }
-
-        if (!isSameMethodSignatures(funcName, funcType)) {
-            errors.semError(funcId, 
-                            "Method overridden with different type signature: %s", 
-                            funcName);
-            return;
-        }
-    }
-
-    private boolean isValidFirstParameter(String className, FuncType funcType) {
-        if (funcType.parameters.size() == 0) {
-            return false;
-        }
-
-        String fstParam = funcType.getParamType(0).className();
-        return fstParam.equals(className);
-    }
-
-    private boolean isValidMethodName(String funcName) {
-        SymbolTable<SymbolType> superSym = stk.peek().getParent();
-        if (superSym.get(funcName) != null
-                && superSym.get(funcName) instanceof ValueType) {
-            return false;
-        }
-        return true;
-    }
-
-    private boolean isSameMethodSignatures(String funcName, FuncType funcType) {
-        SymbolTable<SymbolType> superSym = stk.peek().getParent();
-        FuncType superFuncType = (FuncType) superSym.get(funcName);
-
-        if (superFuncType == null) {
-            return true;
-        }
-
-        if (superFuncType.parameters.size() != funcType.parameters.size()) {
-            return false;
-        }
-
-        if (funcName.equals("__init__") && funcType.parameters.size() == 1) {
-            return true;
-        }
-
-        for (int i = 1; i < funcType.parameters.size(); i++) {
-            ValueType superParam = superFuncType.parameters.get(i);
-            ValueType param = funcType.parameters.get(i);
-            if (!superParam.equals(param)) {
-                return false;
-            }
-        }
-
-        if (!superFuncType.returnType.equals(funcType.returnType)) {
-            return false;
-        }
-
-        return true;
-    } 
 
 }
