@@ -248,11 +248,21 @@ public class CodeGenImpl extends CodeGenBase {
         public Void analyze(Identifier node) {
             String varName = node.name;
             SymbolInfo symbolInfo = sym.get(varName);
+
             if (symbolInfo instanceof StackVarInfo) {
-                int id = funcInfo.getVarIndex(varName);
+                SymbolTable<SymbolInfo> curSym = sym;
+                FuncInfo curFuncInfo = funcInfo;
+                backend.emitMV(T0, FP, "Save FP for iteration.");
+                while (!curSym.declares(varName)) {
+                    curSym = curSym.getParent();
+                    curFuncInfo = curFuncInfo.getParentFuncInfo();
+                    backend.emitLW(T0, T0, -2 * backend.getWordSize(),
+                            "Load parent function scope.");
+                }
+                int id = curFuncInfo.getVarIndex(varName);
                 // offset based current FP position (argument n-1, lastest argument)
-                int offset = funcInfo.getParams().size() - 1 - id;
-                backend.emitLW(A0, FP, offset * backend.getWordSize(),
+                int offset = curFuncInfo.getParams().size() - 1 - id;
+                backend.emitLW(A0, T0, offset * backend.getWordSize(),
                         "Load local var: " + varName);
             }
             if (symbolInfo instanceof GlobalVarInfo) {
