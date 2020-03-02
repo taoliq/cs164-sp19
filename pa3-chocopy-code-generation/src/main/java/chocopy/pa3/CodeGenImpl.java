@@ -301,6 +301,175 @@ public class CodeGenImpl extends CodeGenBase {
 //            backend.emitSW(T0, SP, 0, "Load label to stack");
             return null;
         }
+
+        @Override
+        public Void analyze(BinaryExpr binaryExpr) {
+            if (!binaryExpr.operator.equals("and")
+                    && !binaryExpr.operator.equals("or")) {
+                binaryExpr.left.dispatch(this);
+                backend.emitSW(A0, SP, -1 * backend.getWordSize(),
+                        "Save left expression value.");
+
+                binaryExpr.right.dispatch(this);
+                backend.emitSW(A0, SP, -2 * backend.getWordSize(),
+                        "Save right expression value.");
+
+                backend.emitLW(T0, SP, -1 * backend.getWordSize(),
+                        "Load left expression value.");
+                backend.emitLW(T1, SP, -2 * backend.getWordSize(),
+                        "Load right expression value.");
+            }
+
+            Label compareBranch = null;
+            Label compareFinish = null;
+
+            switch (binaryExpr.operator) {
+                case "+":
+                    backend.emitADD(A0, T0, T1, "add");
+                    break;
+                case "-":
+                    backend.emitSUB(A0, T0, T1, "sub");
+                    break;
+                case "*":
+                    backend.emitMUL(A0, T0, T1, "mul");
+                    break;
+                case "//":
+                    backend.emitDIV(A0, T0, T1, "div");
+                    break;
+                case "%":
+                    backend.emitREM(A0, T0, T1, "remainer");
+                    break;
+
+                case "==":
+                    compareBranch = generateLocalLabel();
+                    compareFinish = generateLocalLabel();
+
+                    backend.emitBEQ(T0, T1, compareBranch, "Go to equal branch");
+                    backend.emitLI(A0, 0, "Load integer of False");
+                    backend.emitJ(compareFinish, null);
+
+                    backend.emitLocalLabel(compareBranch, "Equal branch");
+                    backend.emitLI(A0, 1, "Load integer of True");
+
+                    backend.emitLocalLabel(compareFinish, "compare finish");
+                    break;
+                case "!=":
+                    compareBranch = generateLocalLabel();
+                    compareFinish = generateLocalLabel();
+
+                    backend.emitBNE(T0, T1, compareBranch,
+                            "Go to not equal branch");
+                    backend.emitLI(A0, 0, "Load integer of False");
+                    backend.emitJ(compareFinish, null);
+
+                    backend.emitLocalLabel(compareBranch, "not equal branch");
+                    backend.emitLI(A0, 1, "Load integer of True");
+
+                    backend.emitLocalLabel(compareFinish, "compare finish");
+                    break;
+                case ">":
+                    compareBranch = generateLocalLabel();
+                    compareFinish = generateLocalLabel();
+
+                    backend.emitBLT(T1, T0, compareBranch,
+                            "Go to greater branch");
+                    backend.emitLI(A0, 0, "Load integer of False");
+                    backend.emitJ(compareFinish, null);
+
+                    backend.emitLocalLabel(compareBranch, "greater branch");
+                    backend.emitLI(A0, 1, "Load integer of True");
+
+                    backend.emitLocalLabel(compareFinish, "compare finish");
+                    break;
+                case ">=":
+                    compareBranch = generateLocalLabel();
+                    compareFinish = generateLocalLabel();
+
+                    backend.emitBGE(T0, T1, compareBranch,
+                            "Go to greater or equal branch");
+                    backend.emitLI(A0, 0, "Load integer of False");
+                    backend.emitJ(compareFinish, null);
+
+                    backend.emitLocalLabel(compareBranch, "greater or equal branch");
+                    backend.emitLI(A0, 1, "Load integer of True");
+
+                    backend.emitLocalLabel(compareFinish, "compare finish");
+                    break;
+                case "<":
+                    compareBranch = generateLocalLabel();
+                    compareFinish = generateLocalLabel();
+
+                    backend.emitBLT(T0, T1, compareBranch,
+                            "Go to less branch");
+                    backend.emitLI(A0, 0, "Load integer of False");
+                    backend.emitJ(compareFinish, null);
+
+                    backend.emitLocalLabel(compareBranch, "less branch");
+                    backend.emitLI(A0, 1, "Load integer of True");
+
+                    backend.emitLocalLabel(compareFinish, "compare finish");
+                    break;
+                case "<=":
+                    compareBranch = generateLocalLabel();
+                    compareFinish = generateLocalLabel();
+
+                    backend.emitBGE(T1, T0, compareBranch,
+                            "Go to less or equal branch");
+                    backend.emitLI(A0, 0, "Load integer of False");
+                    backend.emitJ(compareFinish, null);
+
+                    backend.emitLocalLabel(compareBranch, "less or equal branch");
+                    backend.emitLI(A0, 1, "Load integer of True");
+
+                    backend.emitLocalLabel(compareFinish, "compare finish");
+                    break;
+
+                case "and":
+                case "or":
+                    compareFinish = generateLocalLabel();
+                    int shortCircuitValue = binaryExpr.operator.equals("and") ? 0 : 1;
+
+                    binaryExpr.left.dispatch(this);
+                    backend.emitLI(T0, shortCircuitValue,
+                            "Load short-circuit value " + shortCircuitValue);
+                    backend.emitBEQ(A0, T0, compareBranch, "short-circuit");
+
+                    binaryExpr.right.dispatch(this);
+                    backend.emitLocalLabel(compareFinish, "binary logical finish");
+                    break;
+
+                default:
+                    break;
+            }
+
+            return null;
+        }
+
+        @Override
+        public Void analyze(UnaryExpr e) {
+            e.operand.dispatch(this);
+            switch (e.operator) {
+                case "-":
+                    backend.emitSUB(A0, ZERO, A0, "Get negative number.");
+                    break;
+                case "not":
+                    backend.emitXORI(A0, A0, 1, "Flip the expr value");
+                    break;
+                default:
+                    break;
+            }
+            return null;
+        }
+
+        @Override
+        public Void analyze(IfExpr node) {
+            return super.analyze(node);
+        }
+
+        @Override
+        public Void analyze(IfStmt node) {
+            return super.analyze(node);
+        }
     }
 
     /**
