@@ -4,12 +4,10 @@ import java.util.List;
 
 import chocopy.common.analysis.SymbolTable;
 import chocopy.common.analysis.AbstractNodeAnalyzer;
+import chocopy.common.analysis.types.SymbolType;
+import chocopy.common.analysis.types.ValueType;
 import chocopy.common.astnodes.*;
-import chocopy.common.codegen.CodeGenBase;
-import chocopy.common.codegen.FuncInfo;
-import chocopy.common.codegen.Label;
-import chocopy.common.codegen.RiscVBackend;
-import chocopy.common.codegen.SymbolInfo;
+import chocopy.common.codegen.*;
 
 import static chocopy.common.codegen.RiscVBackend.Register.*;
 
@@ -86,6 +84,22 @@ public class CodeGenImpl extends CodeGenBase {
         backend.emitSW(RA, SP, 4, "Save RA.");
         backend.emitADDI(FP, SP, 2 * backend.getWordSize(),
                 "Set FP to previous SP.");
+
+        for (StackVarInfo localVar : funcInfo.getLocals()) {
+            ValueType type = localVar.getVarType();
+            Literal value = localVar.getInitialValue();
+            if (type != null && type.equals(SymbolType.INT_TYPE)) {
+                backend.emitLI(T0, ((IntegerLiteral) value).value,
+                        "Load integer literal" + ((IntegerLiteral) value).value);
+            } else if (type != null && type.equals(SymbolType.BOOL_TYPE)) {
+                backend.emitLI(T0, ((BooleanLiteral) value).value ? 1 : 0,
+                        "Load boolean literal" + ((BooleanLiteral) value).value);
+            }
+            backend.emitADDI(SP, SP, -1 * backend.getWordSize(),
+                    "Move SP to save local variable.");
+            backend.emitSW(T0, SP, 0,
+                    "local variable" + localVar.getVarName());
+        }
 
         for (Stmt stmt : funcInfo.getStatements()) {
             stmt.dispatch(stmtAnalyzer);
@@ -167,7 +181,6 @@ public class CodeGenImpl extends CodeGenBase {
                 backend.emitMV(A0, ZERO, "Returning None implicitly");
             } else {
                 stmt.value.dispatch(this);
-//                backend.emitLW(A0, SP, 0, "Load label to register");
             }
             backend.emitJ(epilogue, "Go to return");
             return null;
@@ -181,13 +194,47 @@ public class CodeGenImpl extends CodeGenBase {
         }
 
         @Override
+        public Void analyze(AssignStmt assignStmt) {
+            assignStmt.value.dispatch(this);
+            for (Expr tar : assignStmt.targets) {
+                String varName = ((Identifier) tar).name;
+                SymbolInfo symbolInfo = sym.get(varName);
+                // TODO: need box when target is object and value is int/bool
+                if (symbolInfo instanceof StackVarInfo) {
+                    int id = funcInfo.getVarIndex(varName);
+                    // offset based current FP position (argument n-1, lastest argument)
+                    int offset = funcInfo.getParams().size() - 1 - id;
+                    backend.emitSW(A0, FP, offset * backend.getWordSize(),
+                            "Store local var: " + varName);
+                }
+                if (symbolInfo instanceof GlobalVarInfo) {
+                    backend.emitSW(A0, ((GlobalVarInfo) symbolInfo).getLabel(), T6,
+                            "Store global var: " + varName);
+                }
+            }
+            return null;
+        }
+
+        @Override
         public Void analyze(CallExpr callExpr) {
             String callName = callExpr.function.name;
             FuncInfo info = (FuncInfo) sym.get(callName);
 
             // TODO: delete arguments when finished call function
-            for (Expr e : callExpr.args) {
+            for (int i = 0; i < callExpr.args.size(); i++) {
+                Expr e = callExpr.args.get(i);
+                String paramName = info.getParams().get(i);
+                StackVarInfo paramInfo = (StackVarInfo) info.getSymbolTable().get(paramName);
+
                 e.dispatch(this);
+                if (e.getInferredType().equals(SymbolType.INT_TYPE)
+                        && paramInfo.getVarType().equals(SymbolType.OBJECT_TYPE)) {
+                    backend.emitInsn("jal makeint", "Box integer");
+                }
+                if (e.getInferredType().equals(SymbolType.BOOL_TYPE)
+                        && paramInfo.getVarType().equals(SymbolType.OBJECT_TYPE)) {
+                    backend.emitInsn("jal makebool", "Box boolean");
+                }
                 backend.emitADDI(SP, SP, -1 * backend.getWordSize(),
                         "Move SP to save argument.");
                 backend.emitSW(A0, SP, 0, "Load argument to stack");
@@ -200,31 +247,38 @@ public class CodeGenImpl extends CodeGenBase {
         @Override
         public Void analyze(Identifier node) {
             String varName = node.name;
-            int id = funcInfo.getVarIndex(varName);
-            // offset based current FP position (argument n-1, lastest argument)
-            int offset = funcInfo.getParams().size() - 1 - id;
-            backend.emitLW(A0, FP, offset * backend.getWordSize(),
-                    "Move argument to reg.");
+            SymbolInfo symbolInfo = sym.get(varName);
+            if (symbolInfo instanceof StackVarInfo) {
+                int id = funcInfo.getVarIndex(varName);
+                // offset based current FP position (argument n-1, lastest argument)
+                int offset = funcInfo.getParams().size() - 1 - id;
+                backend.emitLW(A0, FP, offset * backend.getWordSize(),
+                        "Load local var: " + varName);
+            }
+            if (symbolInfo instanceof GlobalVarInfo) {
+                backend.emitLW(A0, ((GlobalVarInfo) symbolInfo).getLabel(),
+                        "Load global var: " + varName);
+            }
+
             return null;
         }
 
         @Override
         public Void analyze(BooleanLiteral booleanLiteral) {
-            Label boolLabel = constants.getBoolConstant(booleanLiteral.value);
-//            backend.emitADDI(SP, SP, -1 * backend.getWordSize(),
-//                    "Move SP to save bool literal");
-            backend.emitLA(A0, boolLabel, "Load bool label");
-//            backend.emitSW(T0, SP, 0, "Load label to stack");
+//            Label boolLabel = constants.getBoolConstant(booleanLiteral.value);
+//            backend.emitLA(A0, boolLabel, "Load bool label");
+            backend.emitLI(A0, booleanLiteral.value ? 1 : 0,
+                    "Load boolean literal " + booleanLiteral.value);
             return null;
         }
 
         @Override
         public Void analyze(IntegerLiteral integerLiteral) {
-            Label intLabel = constants.getIntConstant(integerLiteral.value);
-//            backend.emitADDI(SP, SP, -1 * backend.getWordSize(),
-//                    "Move SP to save int literal");
-            backend.emitLA(A0, intLabel, "Load int label");
-//            backend.emitSW(T0, SP, 0, "Load label to stack");
+//            Label intLabel = constants.getIntConstant(integerLiteral.value);
+//            backend.emitLA(A0, intLabel, "Load int label");
+
+            backend.emitLI(A0, integerLiteral.value,
+                    "Load integer literal " + integerLiteral.value);
             return null;
         }
 
@@ -263,6 +317,9 @@ public class CodeGenImpl extends CodeGenBase {
      *
      */
     protected void emitCustomCode() {
+        emitMakeInt();
+        emitMakeBool();
+
         emitErrorFunc(errorNone, "Operation on None");
         emitErrorFunc(errorDiv, "Divison by zero");
         emitErrorFunc(errorOob, "Index out of bounds");
@@ -277,5 +334,38 @@ public class CodeGenImpl extends CodeGenBase {
         backend.emitADDI(A1, A1, getAttrOffset(strClass, "__str__"),
                          "Load address of attribute __str__");
         backend.emitJ(abortLabel, "Abort");
+    }
+
+    private void emitMakeInt() {
+        Label label = new Label("makeint");
+        backend.emitGlobalLabel(label);
+        backend.emitADDI(SP, SP, -8, null);
+        backend.emitSW(RA, SP, 4, null);
+        backend.emitSW(A0, SP, 0, null);
+        ClassInfo intClass = (ClassInfo) globalSymbols.get("int");
+        backend.emitLA(A0, intClass.getPrototypeLabel(), null);
+        backend.emitJAL(new Label("alloc"), null);
+        backend.emitLW(T0, SP, 0, null);
+        backend.emitSW(T0, A0, getAttrOffset(intClass, "__int__"), null);
+        backend.emitLW(RA, SP, 4, null);
+        backend.emitADDI(SP, SP, 8, null);
+        backend.emitJR(RA, null);
+    }
+
+    private void emitMakeBool() {
+        Label funcLabel = new Label("makebool");
+        Label falseBranch = generateLocalLabel();
+        Label trueConstantLabel = constants.getBoolConstant(true);
+        Label falseConstantLabel = constants.getBoolConstant(false);
+
+        backend.emitGlobalLabel(funcLabel);
+        backend.emitLI(T0, 0, "Load integer of False");
+        backend.emitBEQ(A0, T0, falseBranch, "Go to False branch");
+        backend.emitLA(A0, trueConstantLabel, "Load True constant");
+        backend.emitJR(RA, null);
+
+        backend.emitLocalLabel(falseBranch, "False branch");
+        backend.emitLA(A0, falseConstantLabel, "Load False constant");
+        backend.emitJR(RA, null);
     }
 }
