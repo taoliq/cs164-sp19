@@ -98,7 +98,7 @@ public class CodeGenImpl extends CodeGenBase {
             backend.emitADDI(SP, SP, -1 * backend.getWordSize(),
                     "Move SP to save local variable.");
             backend.emitSW(T0, SP, 0,
-                    "local variable" + localVar.getVarName());
+                    "local variable " + localVar.getVarName());
         }
 
         for (Stmt stmt : funcInfo.getStatements()) {
@@ -196,15 +196,29 @@ public class CodeGenImpl extends CodeGenBase {
         @Override
         public Void analyze(AssignStmt assignStmt) {
             assignStmt.value.dispatch(this);
+
             for (Expr tar : assignStmt.targets) {
                 String varName = ((Identifier) tar).name;
                 SymbolInfo symbolInfo = sym.get(varName);
+
                 // TODO: need box when target is object and value is int/bool
                 if (symbolInfo instanceof StackVarInfo) {
-                    int id = funcInfo.getVarIndex(varName);
+                    SymbolTable<SymbolInfo> curSym = sym;
+                    FuncInfo curFuncInfo = funcInfo;
+                    backend.emitMV(T0, FP, "Save FP for iteration.");
+                    // Find the variable by recursion
+                    while (!curSym.declares(varName)) {
+                        int paramNum = curFuncInfo.getParams().size();
+                        curSym = curSym.getParent();
+                        curFuncInfo = curFuncInfo.getParentFuncInfo();
+                        backend.emitLW(T0, T0, paramNum * backend.getWordSize(),
+                                "Load parent function scope.");
+                    }
+
+                    int id = curFuncInfo.getVarIndex(varName);
                     // offset based current FP position (argument n-1, lastest argument)
-                    int offset = funcInfo.getParams().size() - 1 - id;
-                    backend.emitSW(A0, FP, offset * backend.getWordSize(),
+                    int offset = curFuncInfo.getParams().size() - 1 - id;
+                    backend.emitSW(A0, T0, offset * backend.getWordSize(),
                             "Store local var: " + varName);
                 }
                 if (symbolInfo instanceof GlobalVarInfo) {
@@ -218,13 +232,34 @@ public class CodeGenImpl extends CodeGenBase {
         @Override
         public Void analyze(CallExpr callExpr) {
             String callName = callExpr.function.name;
-            FuncInfo info = (FuncInfo) sym.get(callName);
+            FuncInfo callFuncInfo = (FuncInfo) sym.get(callName);
+
+            if (funcInfo != null) {
+                // Get static link for call
+                FuncInfo curFuncInfo = funcInfo;
+                int curDepth = funcInfo.getDepth();
+                int callFuncDepth = callFuncInfo.getDepth();
+                int hop = curDepth - callFuncDepth + 1;
+                backend.emitMV(T0, FP, "Save the current FP.");
+                for (int i = 0; i < hop; i++) {
+                    assert curFuncInfo != null : "current function can not be NULL";
+                    int paramNum = curFuncInfo.getParams().size();
+                    backend.emitLW(T0, T0, paramNum * backend.getWordSize(),
+                            "Load parent function scope.");
+                    curFuncInfo = curFuncInfo.getParentFuncInfo();
+                }
+
+                backend.emitADDI(SP, SP, -1 * backend.getWordSize(),
+                        "Move SP to save static link.");
+                backend.emitSW(T0, SP, 0, "Load static link.");
+
+            }
 
             // TODO: delete arguments when finished call function
             for (int i = 0; i < callExpr.args.size(); i++) {
                 Expr e = callExpr.args.get(i);
-                String paramName = info.getParams().get(i);
-                StackVarInfo paramInfo = (StackVarInfo) info.getSymbolTable().get(paramName);
+                String paramName = callFuncInfo.getParams().get(i);
+                StackVarInfo paramInfo = (StackVarInfo) callFuncInfo.getSymbolTable().get(paramName);
 
                 e.dispatch(this);
                 if (e.getInferredType().equals(SymbolType.INT_TYPE)
@@ -240,7 +275,7 @@ public class CodeGenImpl extends CodeGenBase {
                 backend.emitSW(A0, SP, 0, "Load argument to stack");
             }
 
-            backend.emitJAL(info.getCodeLabel(), "Invoke function " + callName);
+            backend.emitJAL(callFuncInfo.getCodeLabel(), "Invoke function " + callName);
             return null;
         }
 
@@ -253,10 +288,12 @@ public class CodeGenImpl extends CodeGenBase {
                 SymbolTable<SymbolInfo> curSym = sym;
                 FuncInfo curFuncInfo = funcInfo;
                 backend.emitMV(T0, FP, "Save FP for iteration.");
+                //find the variable by recursion
                 while (!curSym.declares(varName)) {
+                    int paramNum = curFuncInfo.getParams().size();
                     curSym = curSym.getParent();
                     curFuncInfo = curFuncInfo.getParentFuncInfo();
-                    backend.emitLW(T0, T0, -2 * backend.getWordSize(),
+                    backend.emitLW(T0, T0, paramNum * backend.getWordSize(),
                             "Load parent function scope.");
                 }
                 int id = curFuncInfo.getVarIndex(varName);
@@ -432,7 +469,7 @@ public class CodeGenImpl extends CodeGenBase {
                     binaryExpr.left.dispatch(this);
                     backend.emitLI(T0, shortCircuitValue,
                             "Load short-circuit value " + shortCircuitValue);
-                    backend.emitBEQ(A0, T0, compareBranch, "short-circuit");
+                    backend.emitBEQ(A0, T0, compareFinish, "short-circuit");
 
                     binaryExpr.right.dispatch(this);
                     backend.emitLocalLabel(compareFinish, "binary logical finish");
@@ -467,8 +504,37 @@ public class CodeGenImpl extends CodeGenBase {
         }
 
         @Override
-        public Void analyze(IfStmt node) {
-            return super.analyze(node);
+        public Void analyze(IfStmt ifStmt) {
+            Label branch = generateLocalLabel();
+            Label finish = generateLocalLabel();
+
+            ifStmt.condition.dispatch(this);
+            backend.emitBEQZ(A0, branch, "Jump when condition is false.");
+            for (Stmt stmt : ifStmt.thenBody) {
+                stmt.dispatch(this);
+            }
+            backend.emitJ(finish, null);
+            backend.emitLocalLabel(branch, "else body begin");
+            for (Stmt stmt : ifStmt.elseBody) {
+                stmt.dispatch(this);
+            }
+            backend.emitLocalLabel(finish, null);
+            return null;
+        }
+
+        @Override
+        public Void analyze(WhileStmt whileStmt) {
+            Label entrance = generateLocalLabel();
+            Label quit = generateLocalLabel();
+            backend.emitLocalLabel(entrance, "Entrance for while loop.");
+            whileStmt.condition.dispatch(this);
+            backend.emitBEQZ(A0, quit, "Jump out when condition is false.");
+            for (Stmt stmt : whileStmt.body) {
+                stmt.dispatch(this);
+            }
+            backend.emitJ(entrance, "Go back to while loop entrance");
+            backend.emitLocalLabel(quit, "Finish while loop.");
+            return null;
         }
     }
 

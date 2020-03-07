@@ -5,3 +5,7 @@
 PDFs and projects code.
 
 I hope my code could help other people.
+
+## Some Hints
+
+[How to solve the nested scopes, or static links](https://www.cs.nmsu.edu/~rth/cs/cs471/f00/ARIs.html)
